@@ -2,100 +2,83 @@
 export const meta = {
   id: 'example.http-test',
   name: 'HGhub HTTP Test',
-  version: '1.0.0',
+  version: '1.1.0',
   protocol: 1
 };
 
-const BASE = 'https://dummyjson.com';
+const API = 'https://dummyjson.com';
 
-function normalizeItem(item) {
+function mapItem(row) {
   return {
-    id: String(item.id),
-    title: item.title || 'Untitled',
-    cover: item.thumbnail || '',
-    description: item.description || '',
-    year: item.year || undefined,
-    rating: item.rating || undefined,
-    tags: Array.isArray(item.tags) ? item.tags : [],
-    detailUrl: `/products/${item.id}`
+    id: String(row.id),
+    title: row.title || 'Untitled',
+    cover: row.thumbnail || '',
+    description: row.description || '',
+    tags: row.tags || []
   };
 }
 
-function parseCursor(cursor) {
-  if (!cursor) return 0;
-
-  const n = Number(cursor);
-
-  if (!Number.isInteger(n) || n < 0) {
-    return 0;
-  }
-
-  return n;
-}
-
-async function request(hg, url, signal) {
-  const res = await hg.http.fetch({
+async function fetchJSON(hg, url, ctx) {
+  const response = await hg.http.fetch({
     url,
     responseType: 'json',
-    signal
+    signal: ctx?.signal
   });
 
-  if (!res.ok) {
+  if (!response.ok) {
     throw new hg.PluginError(
-      'NETWORK',
-      `HTTP request failed: ${res.status}`
+      'UPSTREAM_ERROR',
+      `HTTP ${response.status}`
     );
   }
 
-  return res.data;
+  if (!response.data || typeof response.data !== 'object') {
+    throw new hg.PluginError(
+      'UPSTREAM_CHANGED',
+      'Invalid JSON response'
+    );
+  }
+
+  return response.data;
 }
 
 export default hg => ({
   search: {
-    async search({ query, cursor }, ctx) {
-      const q = String(query || '').trim();
+    async search({ query }, ctx) {
+      const keyword = String(query || '').trim();
 
-      if (!q) {
+      if (!keyword) {
         return {
           items: [],
           next: null
         };
       }
 
-      const skip = parseCursor(cursor);
-      const limit = 20;
-
       const url =
-        `${BASE}/products/search?q=${encodeURIComponent(q)}` +
-        `&limit=${limit}&skip=${skip}`;
+        `${API}/products/search?q=${encodeURIComponent(keyword)}`;
 
-      const data = await request(
-        hg,
-        url,
-        ctx?.signal
-      );
+      const data = await fetchJSON(hg, url, ctx);
 
-      const products = Array.isArray(data.products)
-        ? data.products
-        : [];
+      if (!Array.isArray(data.products)) {
+        throw new hg.PluginError(
+          'UPSTREAM_CHANGED',
+          'Search response is missing products'
+        );
+      }
 
       return {
-        items: products.map(normalizeItem),
-        next:
-          skip + products.length < (data.total || 0)
-            ? String(skip + products.length)
-            : null,
-        total: data.total
+        items: data.products.map(mapItem),
+        next: null
       };
     }
   },
 
   media: {
     async getDetail({ id }, ctx) {
-      const data = await request(
+      const data = await fetchJSON(
         hg,
-        `${BASE}/products/${encodeURIComponent(id)}`,
-        ctx?.signal
+        `${API}/products/${encodeURIComponent(id)}`,
+        ctx
       );
 
       return {
@@ -103,13 +86,13 @@ export default hg => ({
         title: data.title || 'Untitled',
         cover: data.thumbnail || '',
         description: data.description || '',
-        tags: Array.isArray(data.tags) ? data.tags : [],
+        tags: data.tags || [],
         playlists: [{
           id: 'main',
           episodes: [{
             id: String(data.id),
             index: 1,
-            label: data.title || 'Item 1'
+            label: data.title || 'Item'
           }]
         }]
       };
@@ -118,7 +101,7 @@ export default hg => ({
     resolvePlayback() {
       throw new hg.PluginError(
         'UNSUPPORTED',
-        'This test plugin does not provide video playback.'
+        'Playback is not implemented'
       );
     }
   }
